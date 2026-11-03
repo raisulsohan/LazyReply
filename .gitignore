@@ -1,0 +1,15 @@
+# Build output: build.ps1 makes these. LazyReply.exe goes to GitHub Releases instead.
+LazyReply.exe
+app.ico
+*.pdb
+*.tmp
+
+# Settings, keys and logs live in %APPDATA%\LazyReply, never here. Just in case:
+settings.json
+log.txt
+
+# Editors and OS
+.vs/
+.vscode/
+Thumbs.db
+desktop.ini

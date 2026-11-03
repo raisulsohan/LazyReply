@@ -104,9 +104,23 @@ namespace LazyReply
 
         bool ForegroundIsOurs { get { return Native.ProcessOf(Native.GetForegroundWindow()) == myPid; } }
 
+        // Command prompt and PowerShell windows are left alone. The answer is kept per window,
+        // so the process is not looked up again on every key.
+        IntPtr termHwnd;
+        bool termIs;
+        bool ForegroundIsTerminal
+        {
+            get
+            {
+                IntPtr fg = Native.GetForegroundWindow();
+                if (fg != termHwnd) { termHwnd = fg; termIs = Native.IsTerminal(fg); }
+                return termIs;
+            }
+        }
+
         void OnTyped(bool sentenceEnded)
         {
-            if (!Active || ForegroundIsOurs) return;
+            if (!Active || ForegroundIsOurs || ForegroundIsTerminal) return;
             debounce.Stop();
             // A "।", "?", "!" or "." ends the sentence: ask at once (the short wait lets the character reach the box).
             // Without one, only a long pause asks: a short pause mid-sentence is thinking, not a finished
@@ -154,6 +168,7 @@ namespace LazyReply
         {
             FocusReader.Info info = await FocusReader.ReadAsync(1500);
             if (!Active) return;
+            if (ForegroundIsTerminal) { popup.HidePopup(); return; }
             if (!info.Usable || info.ProcessId == myPid)
             {
                 if (justSwitchedOn) popup.ShowHint(FallbackAnchor());   // otherwise leave the box where it is

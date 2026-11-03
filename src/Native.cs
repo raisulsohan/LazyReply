@@ -117,6 +117,25 @@ namespace LazyReply
             return pid;
         }
 
+        // A command prompt or PowerShell window: the classic console, Windows Terminal (where Windows 11
+        // opens both by default) or the PowerShell ISE. Text typed there is a command, not a message.
+        static readonly string[] TerminalClasses = { "ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "PseudoConsoleWindow" };
+        static readonly string[] TerminalProcesses = { "cmd", "powershell", "pwsh", "powershell_ise", "conhost", "OpenConsole", "WindowsTerminal" };
+
+        public static bool IsTerminal(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            if (Array.IndexOf(TerminalClasses, ClassOf(hwnd)) >= 0) return true;
+            try
+            {
+                using (var p = System.Diagnostics.Process.GetProcessById((int)ProcessOf(hwnd)))
+                    foreach (string name in TerminalProcesses)
+                        if (string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch (Exception) { }   // the process ended, or it is not ours to look at
+            return false;
+        }
+
         // Brings a window to the front even when Windows' focus-stealing rules would refuse it.
         public static void ForceForeground(IntPtr hwnd)
         {

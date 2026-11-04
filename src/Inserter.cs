@@ -12,10 +12,11 @@ namespace LazyReply
     {
         class Saved { public string Text; public Image Image; public StringCollection Files; }
 
-        public static void CopyOnly(string text) { SetClip(text); }
+        public static void CopyOnly(string text) { SetClip(ClipText(text)); }
 
         public static void PasteInto(IntPtr hwnd, string text)
         {
+            text = ClipText(text);
             Saved saved = Snapshot();
             if (!SetClip(text)) return;
             Native.ForceForeground(hwnd);
@@ -34,6 +35,7 @@ namespace LazyReply
 
         public static void ReplaceFocused(string text, Action afterPaste)
         {
+            text = ClipText(text);
             Saved saved = Snapshot();
             if (!SetClip(text)) return;
             var keys = new System.Collections.Generic.List<Native.INPUT>();
@@ -79,6 +81,11 @@ namespace LazyReply
             t.Tick += delegate { t.Stop(); t.Dispose(); a(); };
             t.Start();
         }
+
+        // Windows text on the clipboard uses \r\n. Classic edit boxes show a bare \n as nothing, so
+        // the lines of a translation would run together there; chat boxes in browsers read \r\n as
+        // one line break too.
+        static string ClipText(string text) { return Engine.Lines(text).Replace("\n", "\r\n"); }
 
         static bool SetClip(string text)
         {

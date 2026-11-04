@@ -17,10 +17,13 @@ namespace LazyReply
         readonly InlineController inline;
         readonly Timer fgTimer;
         readonly uint myPid;
-        readonly Icon iconEnglish, iconBangla;
-        readonly ToolStripMenuItem miInline, miOpen, miAsk, miAuto, miOff;
+        readonly Icon iconEnglish, iconBangla, iconPaused;
+        readonly ToolStripMenuItem miPause, miInline, miOpen, miAsk, miAuto, miOff;
         SettingsForm settingsForm;
         IntPtr lastExternal;
+        // Paused: nothing opens the translation box by itself (Avro's switch key, the user's own key,
+        // the tip). A click on the tray icon pauses and resumes. Not saved: every start runs normally.
+        bool paused;
 
         public TrayApp()
         {
@@ -52,9 +55,16 @@ namespace LazyReply
             int size = SystemInformation.SmallIconSize.Width;
             iconEnglish = Icon.FromHandle(Theme.Mark(size, Theme.Accent).GetHicon());
             iconBangla = Icon.FromHandle(Theme.Mark(size, Theme.Bangla).GetHicon());
+            iconPaused = Icon.FromHandle(Theme.Mark(size, Theme.Muted).GetHicon());
 
             var menu = new ContextMenuStrip { Font = Theme.F(9.5f), Renderer = Soft.MenuRenderer() };
-            miInline = new ToolStripMenuItem("অনুবাদের বাক্স", null, delegate { if (inline.Active) inline.Deactivate(); else inline.Open(); }) { Font = Theme.FB(9.5f) };
+            miPause = new ToolStripMenuItem("বিরতি   (আইকনে এক ক্লিক)", null, delegate { TogglePause(); });
+            miInline = new ToolStripMenuItem("অনুবাদের বাক্স", null, delegate
+            {
+                if (inline.Active) { inline.Deactivate(); return; }
+                SetPaused(false);   // the user asked for the box: that ends a pause
+                inline.Open();
+            }) { Font = Theme.FB(9.5f) };
             miOpen = new ToolStripMenuItem("", null, delegate { OpenPanel(); });
             var when = new ToolStripMenuItem("শর্টকাট চাপলে");
             miAsk = new ToolStripMenuItem("আগে ছোট টিপে জিজ্ঞেস করো", null, delegate { SetOnBangla(OnBangla.Ask); });
@@ -63,7 +73,7 @@ namespace LazyReply
             when.DropDownItems.AddRange(new ToolStripItem[] { miAsk, miAuto, miOff });
             menu.Items.AddRange(new ToolStripItem[]
             {
-                miInline, miOpen, new ToolStripSeparator(), when,
+                miPause, new ToolStripSeparator(), miInline, miOpen, new ToolStripSeparator(), when,
                 new ToolStripMenuItem("সেটিংস…", null, delegate { ShowSettings(); }),
                 new ToolStripMenuItem("About LazyReply", null, delegate { AboutForm.ShowOnce(iconEnglish); }),
                 new ToolStripSeparator(),
@@ -71,8 +81,8 @@ namespace LazyReply
             });
 
             tray = new NotifyIcon { Icon = iconEnglish, Visible = true, ContextMenuStrip = menu };
-            // A click switches the main feature, translation in the chat box itself, on or off.
-            tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ToggleInline(); };
+            // A click pauses LazyReply, or resumes it and opens the translation box in the chat.
+            tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) TogglePause(); };
             RefreshMenu();
             RefreshTray();
 
@@ -108,7 +118,7 @@ namespace LazyReply
         void OnModeChanged(bool bangla, bool fromSwitchKey)
         {
             RefreshTray();
-            if (panel.IsActiveWindow) return;
+            if (paused || panel.IsActiveWindow) return;
             bool ownKey = avro.OwnKeyCombo != null;   // then the user's own key opens the box, not Avro's
             if (settings.OnBangla == OnBangla.AutoOpen)
             {
@@ -127,6 +137,7 @@ namespace LazyReply
         // The user's own key: it switches their keyboard too, so each press opens or closes the box.
         void OnBoxKey()
         {
+            if (paused) return;
             if (settings.OnBangla == OnBangla.AutoOpen) { if (inline.Active) inline.Deactivate(); else inline.Open(); }
             else if (settings.OnBangla == OnBangla.Ask && !inline.Active) ShowTip();
         }
@@ -161,19 +172,29 @@ namespace LazyReply
                 || c == "TopLevelWindowForOverflowXamlIsland" || c == "Windows.UI.Core.CoreWindow";
         }
 
-        void ToggleInline()
+        void TogglePause()
         {
-            toast.HideToast();
-            if (inline.Active)
+            if (!paused)
             {
-                inline.Deactivate();
-                tray.ShowBalloonTip(2500, "অনুবাদ বন্ধ", "চ্যাটের বক্সে আর সাজেশন আসবে না।", ToolTipIcon.Info);
+                SetPaused(true);
+                tray.ShowBalloonTip(2500, "LazyReply বিরতিতে", "এখন কোনো অনুবাদ আসবে না। আবার চালু করতে আইকনে একবার ক্লিক করুন।", ToolTipIcon.Info);
                 return;
             }
+            SetPaused(false);
             // The tray click made the taskbar the active window: give the chat window its focus back.
             if (lastExternal != IntPtr.Zero && Native.IsWindow(lastExternal)) Native.ForceForeground(lastExternal);
             inline.Open();
             tray.ShowBalloonTip(3500, "অনুবাদ চালু", "চ্যাটের বক্সে বাংলা বা Banglish লিখুন। দাঁড়ি (।) বা ? দিলে বক্সের উপরে ইংরেজি আসবে।", ToolTipIcon.Info);
+        }
+
+        void SetPaused(bool value)
+        {
+            if (paused == value) return;
+            paused = value;
+            Log.Write(value ? "paused" : "resumed");
+            if (value) { toast.HideToast(); inline.Deactivate(); }
+            RefreshMenu();
+            RefreshTray();
         }
 
         void OpenPanel()
@@ -207,6 +228,7 @@ namespace LazyReply
 
         void RefreshMenu()
         {
+            miPause.Checked = paused;
             miInline.Checked = inline.Active;
             miOpen.Text = "আলাদা অনুবাদক উইন্ডো" + (HotkeyText.Length > 0 ? "   (" + HotkeyText + ")" : "");
             miAsk.Checked = settings.OnBangla == OnBangla.Ask;
@@ -216,9 +238,10 @@ namespace LazyReply
 
         void RefreshTray()
         {
-            tray.Icon = avro.Bangla ? iconBangla : iconEnglish;
+            tray.Icon = paused ? iconPaused : (avro.Bangla ? iconBangla : iconEnglish);
             string mode = !avro.AvroRunning ? "Avro চলছে না" : (avro.Bangla ? "Avro: বাংলা" : "Avro: English");
-            string text = "LazyReply · " + mode + (inline != null && inline.Active ? " · অনুবাদ চালু" : "");
+            string text = paused ? "LazyReply · বিরতি · চালু করতে ক্লিক করুন"
+                : "LazyReply · " + mode + (inline != null && inline.Active ? " · অনুবাদ চালু" : "");
             tray.Text = text.Length > 63 ? text.Substring(0, 63) : text;
         }
 

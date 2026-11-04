@@ -107,7 +107,7 @@ There is no way to use Gemini with a Google account and no key: Google ended Gem
 
 - If you change the text in the chat box, these keys do their normal work in the chat app again.
 - In another app, the box moves away. When you type there, it comes back above that chat box.
-- A click on the tray icon also opens or closes the box. The "×" on the box closes it.
+- A click on the tray icon pauses LazyReply: the box closes, the icon turns grey, and no key opens the box. Click the icon again to resume; the box opens in the chat at once. The "×" on the box closes it.
 
 ### The separate translator window
 
@@ -130,7 +130,7 @@ Right-click the **অ** icon → "শর্টকাট চাপলে" (also i
 
 - **Open the box** (default): each press opens the box.
 - **Ask first with a small tip:** a tip appears. "চালু করুন" or `Alt+Y` opens the box.
-- **Do nothing:** the key opens nothing. Click the tray icon to open the box.
+- **Do nothing:** the key opens nothing. Right-click the tray icon → "অনুবাদের বাক্স" to open the box.
 
 The icon colour shows Avro's mode: **blue** = English, **green** = Bangla. If you change Avro's mode with the mouse, LazyReply corrects itself after the first letter you type.
 

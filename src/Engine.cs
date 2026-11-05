@@ -54,7 +54,7 @@ namespace LazyReply
             "- Write the way a fluent professional writes in chat: clear and natural, not stiff.\n" +
             "- Bangla forms of address such as bhai, apu, sir, vaiya are not translated word for word; leave them out or use a natural English equivalent.\n" +
             "- Keep the layout of the message. Where the message starts a new line or a new paragraph, the professional and friendly " +
-            "versions start a new line or paragraph at the same place, with the same line breaks (\\n). Never join separate lines or paragraphs into one. " +
+            "versions start a new line or paragraph at the same place, with the same line breaks. Never join separate lines or paragraphs into one. " +
             "Only the short version may put everything in one paragraph.\n" +
             "- Return three versions:\n" +
             "  professional: polite and clear, right for a client.\n" +
@@ -126,7 +126,8 @@ namespace LazyReply
                 user.Append("\n\nThis message has ").Append(lineCount).Append(" lines (blank lines included). ")
                     .Append(reverse ? "The bangla translation" : (withBangla ? "The professional, friendly and bangla versions" : "The professional and friendly versions"))
                     .Append(" must have the same ").Append(lineCount)
-                    .Append(" lines: translate line by line, in the same order, with a line break (\\n) where the message has one.");
+                    .Append(" lines: translate line by line, in the same order, with a real line break where the message has one. " +
+                        "Never write the two characters backslash and n instead of a line break.");
             }
 
             string[] fields = reverse ? new[] { "bangla", "note" } : ForwardFields(withBangla);
@@ -135,9 +136,11 @@ namespace LazyReply
             Suggestions known;
             lock (cache) if (cache.TryGetValue(cacheKey, out known)) return known;
 
+            // A message that itself contains the text "\n" (code, a file path) keeps it in the answer.
+            bool literalBreaks = text.Contains("\\n") || text.Contains("\\r");
             Action<string> onText = null;
             if (progress != null && !reverse)
-                onText = delegate(string sofar) { var part = PartialSuggestions(sofar); if (part != null) progress(part); };
+                onText = delegate(string sofar) { var part = PartialSuggestions(sofar, literalBreaks); if (part != null) progress(part); };
             string answer;
             if (s.Provider == "claude-cli") answer = await AskClaudeCli(s, system, user.ToString(), fields, ct, onText);
             else if (s.Provider == "gemini") answer = await AskGemini(s, system, user.ToString(), fields, ct);
@@ -151,11 +154,13 @@ namespace LazyReply
             if (d == null) throw new EngineException("উত্তরটি পড়া গেল না। আবার চেষ্টা করুন।");
 
             var r = new Suggestions();
-            if (reverse) { r.Bangla = Lines(Str(d, "bangla")); r.Note = Str(d, "note"); }
+            if (reverse) { r.Bangla = Answer(Str(d, "bangla"), literalBreaks); r.Note = Str(d, "note"); }
             else
             {
-                r.Professional = Lines(Str(d, "professional")); r.Friendly = Lines(Str(d, "friendly")); r.Short = Lines(Str(d, "short"));
-                if (withBangla) r.Bangla = Lines(Str(d, "bangla")).Trim();
+                r.Professional = Answer(Str(d, "professional"), literalBreaks);
+                r.Friendly = Answer(Str(d, "friendly"), literalBreaks);
+                r.Short = Answer(Str(d, "short"), literalBreaks);
+                if (withBangla) r.Bangla = Answer(Str(d, "bangla"), literalBreaks).Trim();
             }
             lock (cache)
             {
@@ -181,16 +186,26 @@ namespace LazyReply
             return ManyBlank.Replace(LineEnds.Replace(text, "\n"), "\n\n");
         }
 
-        static readonly Regex DoneField =new Regex("\"(professional|friendly|short|bangla)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        // One version from the model. Models sometimes escape a line break twice in the JSON, so the
+        // text shows a backslash and an "n" where a new line should be; those become real line breaks,
+        // unless the user's own message contains that text.
+        static string Answer(string text, bool literalBreaks)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? "";
+            if (!literalBreaks) text = text.Replace("\\r\\n", "\n").Replace("\\n", "\n").Replace("\\r", "\n");
+            return Lines(text);
+        }
+
+        static readonly Regex DoneField = new Regex("\"(professional|friendly|short|bangla)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
 
         // The versions whose text is complete in a part of the JSON answer, or null when there is none yet.
-        static Suggestions PartialSuggestions(string sofar)
+        static Suggestions PartialSuggestions(string sofar, bool literalBreaks)
         {
             Suggestions p = null;
             foreach (Match m in DoneField.Matches(sofar))
             {
                 string value;
-                try { value = Json.Deserialize<string>("\"" + m.Groups[2].Value + "\""); }
+                try { value = Answer(Json.Deserialize<string>("\"" + m.Groups[2].Value + "\""), literalBreaks); }
                 catch { continue; }
                 if (p == null) p = new Suggestions();
                 switch (m.Groups[1].Value)

@@ -33,6 +33,9 @@ namespace LazyReply
         public string OwnSwitchKey = "";   // empty: open the box with Avro's own switch key (read from Avro)
         public string AboutMe = "";
         public bool OfferBangla = false;   // English in the chat box also gets a Bangla translation
+        // The places where the user paused LazyReply ("app:claude", "web:facebook.com"). Kept until
+        // the user resumes that place: a restart does not clear it.
+        public List<string> PausedPlaces = new List<string>();
 
         public static readonly string[] ClaudeModels = { "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5" };
 
@@ -80,6 +83,7 @@ namespace LazyReply
                     if (s != null)
                     {
                         if (s.Provider == "gemini-cli") s.Provider = "gemini";   // that mode was removed
+                        if (s.PausedPlaces == null) s.PausedPlaces = new List<string>();
                         return s;
                     }
                 }

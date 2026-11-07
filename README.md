@@ -107,7 +107,7 @@ There is no way to use Gemini with a Google account and no key: Google ended Gem
 
 - If you change the text in the chat box, these keys do their normal work in the chat app again.
 - In another app, the box moves away. When you type there, it comes back above that chat box.
-- A click on the tray icon pauses LazyReply: the box closes, the icon turns grey, and no key opens the box. Click the icon again to resume; the box opens in the chat at once. The "×" on the box closes it.
+- A click on the tray icon pauses LazyReply only in the app you are in, or, in a web browser, only on the website you are on (for example `facebook.com`). There the box hides, the icon turns grey, and no key opens the box. Other apps and websites go on as before. Click the icon again in that place to resume; the box opens in the chat at once. The paused places stay paused after a restart. Right-click the icon → "বিরতিতে থাকা জায়গা" to see them, resume one, or resume all. The "×" on the box closes it.
 
 ### The separate translator window
 

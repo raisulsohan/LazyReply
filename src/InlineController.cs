@@ -31,6 +31,26 @@ namespace LazyReply
 
         public bool Active { get; private set; }
 
+        // The user paused LazyReply in the app or website in front: the box stays open, but it
+        // reads and shows nothing there. It comes back when the user types in a place that is not paused.
+        bool suspended;
+        public bool Suspended
+        {
+            get { return suspended; }
+            set
+            {
+                if (suspended == value) return;
+                suspended = value;
+                if (!value) return;
+                debounce.Stop();
+                Cancel();
+                Captures(false);
+                current = null;
+                currentText = null;
+                popup.HidePopup();
+            }
+        }
+
         public InlineController(Settings settings, AvroWatcher avro, uint myPid)
         {
             this.settings = settings;
@@ -120,7 +140,7 @@ namespace LazyReply
 
         void OnTyped(bool sentenceEnded)
         {
-            if (!Active || ForegroundIsOurs || ForegroundIsTerminal) return;
+            if (!Active || suspended || ForegroundIsOurs || ForegroundIsTerminal) return;
             debounce.Stop();
             // A "।", "?", "!" or "." ends the sentence: ask at once (the short wait lets the character reach the box).
             // Without one, only a long pause asks: a short pause mid-sentence is thinking, not a finished
@@ -167,7 +187,7 @@ namespace LazyReply
         async void Refresh(bool justSwitchedOn)
         {
             FocusReader.Info info = await FocusReader.ReadAsync(1500);
-            if (!Active) return;
+            if (!Active || suspended) return;
             if (ForegroundIsTerminal) { popup.HidePopup(); return; }
             if (!info.Usable || info.ProcessId == myPid)
             {

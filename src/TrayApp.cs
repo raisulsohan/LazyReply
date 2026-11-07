@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading.Tasks;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -18,12 +19,19 @@ namespace LazyReply
         readonly Timer fgTimer;
         readonly uint myPid;
         readonly Icon iconEnglish, iconBangla, iconPaused;
-        readonly ToolStripMenuItem miPause, miInline, miOpen, miAsk, miAuto, miOff;
+        readonly ToolStripMenuItem miPause, miPausedList, miInline, miOpen, miAsk, miAuto, miOff;
         SettingsForm settingsForm;
         IntPtr lastExternal;
-        // Paused: nothing opens the translation box by itself (Avro's switch key, the user's own key,
-        // the tip). A click on the tray icon pauses and resumes. Not saved: every start runs normally.
-        bool paused;
+        // A pause belongs to one place: the app in front, or in a browser the website in front
+        // (see Places). In a paused place nothing opens the translation box by itself (Avro's switch
+        // key, the user's own key, the tip). A click on the tray icon pauses or resumes the place the
+        // user is in; other places go on as before. The list is saved: a restart keeps it.
+        Place here;          // the place of lastExternal, as last read
+        IntPtr hereHwnd;
+        int placeTicks;
+
+        bool IsPaused(Place p) { return p != null && settings.PausedPlaces.Contains(p.Key); }
+        bool Paused { get { return IsPaused(here); } }
 
         public TrayApp()
         {
@@ -58,11 +66,12 @@ namespace LazyReply
             iconPaused = Icon.FromHandle(Theme.Mark(size, Theme.Muted).GetHicon());
 
             var menu = new ContextMenuStrip { Font = Theme.F(9.5f), Renderer = Soft.MenuRenderer() };
-            miPause = new ToolStripMenuItem("বিরতি   (আইকনে এক ক্লিক)", null, delegate { TogglePause(); });
+            miPause = new ToolStripMenuItem("এখানে বিরতি", null, delegate { TogglePause(); });
+            miPausedList = new ToolStripMenuItem("বিরতিতে থাকা জায়গা");
             miInline = new ToolStripMenuItem("অনুবাদের বাক্স", null, delegate
             {
                 if (inline.Active) { inline.Deactivate(); return; }
-                SetPaused(false);   // the user asked for the box: that ends a pause
+                if (Paused) SetPaused(here, false);   // the user asked for the box here: that ends the pause here
                 inline.Open();
             }) { Font = Theme.FB(9.5f) };
             miOpen = new ToolStripMenuItem("", null, delegate { OpenPanel(); });
@@ -73,7 +82,7 @@ namespace LazyReply
             when.DropDownItems.AddRange(new ToolStripItem[] { miAsk, miAuto, miOff });
             menu.Items.AddRange(new ToolStripItem[]
             {
-                miPause, new ToolStripSeparator(), miInline, miOpen, new ToolStripSeparator(), when,
+                miPause, miPausedList, new ToolStripSeparator(), miInline, miOpen, new ToolStripSeparator(), when,
                 new ToolStripMenuItem("সেটিংস…", null, delegate { ShowSettings(); }),
                 new ToolStripMenuItem("About LazyReply", null, delegate { AboutForm.ShowOnce(iconEnglish); }),
                 new ToolStripSeparator(),
@@ -81,7 +90,8 @@ namespace LazyReply
             });
 
             tray = new NotifyIcon { Icon = iconEnglish, Visible = true, ContextMenuStrip = menu };
-            // A click pauses LazyReply, or resumes it and opens the translation box in the chat.
+            // A click pauses LazyReply in the app or website the user is in, or resumes it there and
+            // opens the translation box in the chat.
             tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) TogglePause(); };
             RefreshMenu();
             RefreshTray();
@@ -92,6 +102,11 @@ namespace LazyReply
             {
                 IntPtr fg = Native.GetForegroundWindow();
                 if (fg != IntPtr.Zero && Native.ProcessOf(fg) != myPid && !IsTaskbar(fg)) lastExternal = fg;
+                // A new window: read its place at once. A browser: read the address bar twice a second,
+                // since a tab or a link changes the website without a new window.
+                placeTicks++;
+                bool browser = here != null && (here.Key.StartsWith("web:") || IsBrowserKey(here));
+                if (lastExternal != hereHwnd || (browser && placeTicks % 2 == 0)) TrackPlace();
             };
             fgTimer.Start();
 
@@ -113,12 +128,48 @@ namespace LazyReply
             Engine.Warm(settings);   // account mode: start Claude Code now, not at the first message
         }
 
+        static bool IsBrowserKey(Place p)
+        {
+            return p != null && p.Key.StartsWith("app:") && Places.IsBrowser(p.Key.Substring(4));
+        }
+
+        async void TrackPlace()
+        {
+            IntPtr hwnd = lastExternal;
+            if (hwnd == IntPtr.Zero) return;
+            Place p = await Places.OfAsync(hwnd, 1500);
+            if (p == null || hwnd != lastExternal) return;
+            hereHwnd = hwnd;
+            SetHere(p);
+        }
+
+        void SetHere(Place p)
+        {
+            bool changed = here == null || here.Key != p.Key;
+            here = p;
+            if (!changed) return;
+            inline.Suspended = Paused;
+            if (Paused) toast.HideToast();
+            RefreshMenu();
+            RefreshTray();
+        }
+
+        // Before a key opens the box: the place in front now, not the one read a moment ago.
+        async Task<bool> PausedNow()
+        {
+            IntPtr fg = Native.GetForegroundWindow();
+            if (fg == IntPtr.Zero || Native.ProcessOf(fg) == myPid || IsTaskbar(fg)) return Paused;
+            Place p = await Places.OfAsync(fg, 600);
+            if (p != null) { lastExternal = fg; hereHwnd = fg; SetHere(p); }
+            return Paused;
+        }
+
         string HotkeyText { get { return avro.PanelKey == null ? "" : avro.PanelKey.ToString(); } }
 
-        void OnModeChanged(bool bangla, bool fromSwitchKey)
+        async void OnModeChanged(bool bangla, bool fromSwitchKey)
         {
             RefreshTray();
-            if (paused || panel.IsActiveWindow) return;
+            if (panel.IsActiveWindow || await PausedNow()) return;
             bool ownKey = avro.OwnKeyCombo != null;   // then the user's own key opens the box, not Avro's
             if (settings.OnBangla == OnBangla.AutoOpen)
             {
@@ -135,9 +186,9 @@ namespace LazyReply
         }
 
         // The user's own key: it switches their keyboard too, so each press opens or closes the box.
-        void OnBoxKey()
+        async void OnBoxKey()
         {
-            if (paused) return;
+            if (await PausedNow()) return;
             if (settings.OnBangla == OnBangla.AutoOpen) { if (inline.Active) inline.Deactivate(); else inline.Open(); }
             else if (settings.OnBangla == OnBangla.Ask && !inline.Active) ShowTip();
         }
@@ -172,27 +223,54 @@ namespace LazyReply
                 || c == "TopLevelWindowForOverflowXamlIsland" || c == "Windows.UI.Core.CoreWindow";
         }
 
-        void TogglePause()
+        // Pauses or resumes only the place the user is in: the app, or in a browser the website.
+        async void TogglePause()
         {
-            if (!paused)
+            IntPtr target = lastExternal;
+            Place p = await Places.OfAsync(target, 1500);
+            if (p == null) p = here;
+            else if (target == lastExternal) { hereHwnd = target; SetHere(p); }
+            if (p == null)
             {
-                SetPaused(true);
-                tray.ShowBalloonTip(2500, "LazyReply বিরতিতে", "এখন কোনো অনুবাদ আসবে না। আবার চালু করতে আইকনে একবার ক্লিক করুন।", ToolTipIcon.Info);
+                tray.ShowBalloonTip(3500, "LazyReply", "কোন অ্যাপে আছেন, তা বোঝা যায়নি। চ্যাটের বক্সে একবার ক্লিক করে আবার চেষ্টা করুন।", ToolTipIcon.Info);
                 return;
             }
-            SetPaused(false);
+            if (!IsPaused(p))
+            {
+                SetPaused(p, true);
+                tray.ShowBalloonTip(3000, "বিরতি: " + p.Name,
+                    "এখানে কোনো অনুবাদ আসবে না। অন্য অ্যাপ আর সাইটে LazyReply আগের মতো চলবে। এখানে আবার চালু করতে আইকনে ক্লিক করুন।", ToolTipIcon.Info);
+                return;
+            }
+            SetPaused(p, false);
             // The tray click made the taskbar the active window: give the chat window its focus back.
-            if (lastExternal != IntPtr.Zero && Native.IsWindow(lastExternal)) Native.ForceForeground(lastExternal);
+            if (target != IntPtr.Zero && Native.IsWindow(target)) Native.ForceForeground(target);
             inline.Open();
-            tray.ShowBalloonTip(3500, "অনুবাদ চালু", "চ্যাটের বক্সে বাংলা বা Banglish লিখুন। দাঁড়ি (।) বা ? দিলে বক্সের উপরে ইংরেজি আসবে।", ToolTipIcon.Info);
+            tray.ShowBalloonTip(3500, "অনুবাদ চালু: " + p.Name, "চ্যাটের বক্সে বাংলা বা Banglish লিখুন। দাঁড়ি (।) বা ? দিলে বক্সের উপরে ইংরেজি আসবে।", ToolTipIcon.Info);
         }
 
-        void SetPaused(bool value)
+        void SetPaused(Place p, bool value) { SetPaused(p.Key, value); }
+
+        void SetPaused(string key, bool value)
         {
-            if (paused == value) return;
-            paused = value;
-            Log.Write(value ? "paused" : "resumed");
-            if (value) { toast.HideToast(); inline.Deactivate(); }
+            var list = settings.PausedPlaces;
+            if (list.Contains(key) == value) return;
+            if (value) list.Add(key); else list.Remove(key);
+            settings.Save();
+            Log.Write((value ? "paused " : "resumed ") + key);
+            inline.Suspended = Paused;
+            if (Paused) toast.HideToast();
+            RefreshMenu();
+            RefreshTray();
+        }
+
+        void ResumeEverywhere()
+        {
+            if (settings.PausedPlaces.Count == 0) return;
+            settings.PausedPlaces.Clear();
+            settings.Save();
+            Log.Write("resumed everywhere");
+            inline.Suspended = false;
             RefreshMenu();
             RefreshTray();
         }
@@ -228,7 +306,21 @@ namespace LazyReply
 
         void RefreshMenu()
         {
-            miPause.Checked = paused;
+            miPause.Text = (here == null ? "এখানে বিরতি" : "বিরতি: " + here.Name) + "   (আইকনে এক ক্লিক)";
+            miPause.Checked = Paused;
+            miPausedList.DropDownItems.Clear();
+            foreach (string key in settings.PausedPlaces.ToArray())
+            {
+                string k = key;
+                miPausedList.DropDownItems.Add(new ToolStripMenuItem(Place.NameOf(k) + "  ·  চালু করো", null, delegate { SetPaused(k, false); }));
+            }
+            if (settings.PausedPlaces.Count > 0)
+            {
+                miPausedList.DropDownItems.Add(new ToolStripSeparator());
+                miPausedList.DropDownItems.Add(new ToolStripMenuItem("সব জায়গায় চালু করো", null, delegate { ResumeEverywhere(); }));
+            }
+            miPausedList.Text = "বিরতিতে থাকা জায়গা (" + settings.PausedPlaces.Count + ")";
+            miPausedList.Enabled = settings.PausedPlaces.Count > 0;
             miInline.Checked = inline.Active;
             miOpen.Text = "আলাদা অনুবাদক উইন্ডো" + (HotkeyText.Length > 0 ? "   (" + HotkeyText + ")" : "");
             miAsk.Checked = settings.OnBangla == OnBangla.Ask;
@@ -238,9 +330,10 @@ namespace LazyReply
 
         void RefreshTray()
         {
+            bool paused = Paused;
             tray.Icon = paused ? iconPaused : (avro.Bangla ? iconBangla : iconEnglish);
             string mode = !avro.AvroRunning ? "Avro চলছে না" : (avro.Bangla ? "Avro: বাংলা" : "Avro: English");
-            string text = paused ? "LazyReply · বিরতি · চালু করতে ক্লিক করুন"
+            string text = paused ? "LazyReply · বিরতি: " + here.Name + " · চালু করতে ক্লিক"
                 : "LazyReply · " + mode + (inline != null && inline.Active ? " · অনুবাদ চালু" : "");
             tray.Text = text.Length > 63 ? text.Substring(0, 63) : text;
         }
